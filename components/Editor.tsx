@@ -13,6 +13,8 @@ interface CodeEditorProps {
   onLanguageChange: (lang: string) => void;
   onRun: () => void;
   isRunning: boolean;
+  onToggleQuestion?: () => void;
+  showQuestionButton?: boolean;
 }
 
 const CodeEditor: React.FC<CodeEditorProps> = ({ 
@@ -21,15 +23,17 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
   onChange, 
   onLanguageChange, 
   onRun, 
-  isRunning 
+  isRunning,
+  onToggleQuestion,
+  showQuestionButton = false
 }) => {
   return (
     <div className="flex flex-col h-full bg-[#1e1e1e] rounded-xl overflow-hidden shadow-2xl border border-gray-700">
-      <div className="flex items-center justify-between px-4 py-2 bg-[#252526] border-b border-gray-700">
-        <div className="flex items-center space-x-4">
+      <div className="flex items-center justify-between px-4 py-2 bg-[#252526] border-b border-gray-700 h-12 shrink-0">
+        <div className="flex items-center space-x-3">
           <div className="flex items-center space-x-2 text-gray-300">
             <ICONS.Code2 className="w-4 h-4" />
-            <span className="text-sm font-medium">Editor</span>
+            <span className="text-sm font-medium hidden sm:inline">Editor</span>
           </div>
           
           <div className="relative">
@@ -51,6 +55,17 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
               ))}
             </select>
           </div>
+
+          {showQuestionButton && (
+            <button
+              onClick={onToggleQuestion}
+              className="flex items-center space-x-1 px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 border border-gray-600 text-xs text-blue-400 font-medium transition-colors"
+              title="Toggle Problem View"
+            >
+              <ICONS.FileText className="w-3 h-3" />
+              <span>Problem</span>
+            </button>
+          )}
         </div>
 
         <button

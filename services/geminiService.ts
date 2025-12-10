@@ -10,6 +10,7 @@ export class GeminiService {
   private nextStartTime = 0;
   private sources = new Set<AudioBufferSourceNode>();
   private cleanupCallbacks: (() => void)[] = [];
+  private isConnected = false;
 
   constructor() {
     this.ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
@@ -39,10 +40,15 @@ export class GeminiService {
   }
 
   async connect(
+    stream: MediaStream,
     onAudioData: (visualData: number) => void,
     onClose: () => void,
     onError: (err: any) => void
   ) {
+    // Reset state
+    this.disconnect();
+    this.isConnected = false;
+
     this.inputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({
       sampleRate: PCM_SAMPLE_RATE
     });
@@ -50,21 +56,33 @@ export class GeminiService {
       sampleRate: AUDIO_OUTPUT_SAMPLE_RATE
     });
 
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    
-    // Setup Input
+    // Ensure AudioContexts are running (handling autoplay policies)
+    if (this.inputAudioContext.state === 'suspended') {
+      await this.inputAudioContext.resume();
+    }
+    if (this.outputAudioContext.state === 'suspended') {
+      await this.outputAudioContext.resume();
+    }
+
+    // Setup Input from existing stream
     const source = this.inputAudioContext.createMediaStreamSource(stream);
     const scriptProcessor = this.inputAudioContext.createScriptProcessor(4096, 1, 1);
     
     scriptProcessor.onaudioprocess = (audioProcessingEvent) => {
+      if (!this.isConnected || !this.sessionPromise) return;
+
       const inputData = audioProcessingEvent.inputBuffer.getChannelData(0);
       const pcmBlob = createBlob(inputData);
       
-      if (this.sessionPromise) {
-        this.sessionPromise.then((session) => {
+      this.sessionPromise.then((session) => {
+        try {
           session.sendRealtimeInput({ media: pcmBlob });
-        });
-      }
+        } catch (e) {
+          // Silent catch for send errors to prevent loop noise
+        }
+      }).catch(() => {
+          // Ignore errors from the session promise if it failed to connect
+      });
     };
     
     source.connect(scriptProcessor);
@@ -80,70 +98,95 @@ export class GeminiService {
     // Visualization Loop
     const bufferLength = analyser.frequencyBinCount;
     const dataArray = new Uint8Array(bufferLength);
+    let animationFrameId: number;
+
     const updateVisuals = () => {
+      if (!this.isConnected) return;
       analyser.getByteFrequencyData(dataArray);
       let sum = 0;
       for (let i = 0; i < bufferLength; i++) {
         sum += dataArray[i];
       }
       onAudioData(sum / bufferLength);
-      requestAnimationFrame(updateVisuals);
+      animationFrameId = requestAnimationFrame(updateVisuals);
     };
-    updateVisuals();
 
     // Connect to Gemini
-    this.sessionPromise = this.ai.live.connect({
-      model: 'gemini-2.5-flash-native-audio-preview-09-2025',
-      callbacks: {
-        onopen: () => {
-          console.log("Gemini Live Connected");
-        },
-        onmessage: async (message: LiveServerMessage) => {
-          const base64Audio = message.serverContent?.modelTurn?.parts[0]?.inlineData?.data;
-          
-          if (base64Audio && this.outputAudioContext) {
-            this.nextStartTime = Math.max(this.nextStartTime, this.outputAudioContext.currentTime);
+    try {
+      this.sessionPromise = this.ai.live.connect({
+        model: 'gemini-2.5-flash-native-audio-preview-09-2025',
+        callbacks: {
+          onopen: () => {
+            console.log("Gemini Live Connected");
+            this.isConnected = true;
+            updateVisuals();
+          },
+          onmessage: async (message: LiveServerMessage) => {
+            const base64Audio = message.serverContent?.modelTurn?.parts[0]?.inlineData?.data;
             
-            const audioBuffer = await decodeAudioData(
-              decode(base64Audio),
-              this.outputAudioContext,
-              AUDIO_OUTPUT_SAMPLE_RATE,
-              1
-            );
-            
-            const source = this.outputAudioContext.createBufferSource();
-            source.buffer = audioBuffer;
-            source.connect(outputGain); // Connect to gain/analyser
-            
-            source.addEventListener('ended', () => {
-              this.sources.delete(source);
-            });
+            if (base64Audio && this.outputAudioContext) {
+              this.nextStartTime = Math.max(this.nextStartTime, this.outputAudioContext.currentTime);
+              
+              try {
+                const audioBuffer = await decodeAudioData(
+                  decode(base64Audio),
+                  this.outputAudioContext,
+                  AUDIO_OUTPUT_SAMPLE_RATE,
+                  1
+                );
+                
+                const source = this.outputAudioContext.createBufferSource();
+                source.buffer = audioBuffer;
+                source.connect(outputGain); // Connect to gain/analyser
+                
+                source.addEventListener('ended', () => {
+                  this.sources.delete(source);
+                });
 
-            source.start(this.nextStartTime);
-            this.nextStartTime += audioBuffer.duration;
-            this.sources.add(source);
+                source.start(this.nextStartTime);
+                this.nextStartTime += audioBuffer.duration;
+                this.sources.add(source);
+              } catch (e) {
+                console.error("Error decoding/playing audio", e);
+              }
+            }
+          },
+          onclose: (e) => {
+            console.log("Gemini Live Closed", e);
+            this.isConnected = false;
+            onClose();
+          },
+          onerror: (e) => {
+             // Only report error if we were previously connected.
+             // Initial connection failures are handled by the promise catch block below.
+            if (this.isConnected) {
+               console.error("Gemini Live Error", e);
+               this.isConnected = false;
+               onError(e);
+            }
           }
         },
-        onclose: (e) => {
-          console.log("Gemini Live Closed", e);
-          onClose();
-        },
-        onerror: (e) => {
-          console.error("Gemini Live Error", e);
-          onError(e);
+        config: {
+          responseModalities: [Modality.AUDIO],
+          speechConfig: {
+            voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } }
+          },
+          systemInstruction: SYSTEM_INSTRUCTION
         }
-      },
-      config: {
-        responseModalities: [Modality.AUDIO],
-        speechConfig: {
-          voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } }
-        },
-        systemInstruction: SYSTEM_INSTRUCTION
-      }
-    });
+      });
+      
+      // Wait for initial connection to confirm success
+      await this.sessionPromise;
+      
+    } catch (e) {
+      this.disconnect();
+      throw e; // Re-throw to be caught by App.tsx
+    }
 
     this.cleanupCallbacks.push(() => {
-        stream.getTracks().forEach(track => track.stop());
+        this.isConnected = false;
+        if (animationFrameId) cancelAnimationFrame(animationFrameId);
+        
         source.disconnect();
         scriptProcessor.disconnect();
         outputGain.disconnect();
@@ -154,7 +197,7 @@ export class GeminiService {
   }
 
   async sendVideoFrame(videoEl: HTMLVideoElement) {
-    if (!this.sessionPromise) return;
+    if (!this.isConnected || !this.sessionPromise) return;
 
     const canvas = document.createElement('canvas');
     canvas.width = videoEl.videoWidth;
@@ -167,12 +210,23 @@ export class GeminiService {
     // Low quality jpeg for speed
     canvas.toBlob(async (blob) => {
       if (blob) {
-        const base64Data = await blobToBase64(blob);
-        this.sessionPromise?.then(session => {
-          session.sendRealtimeInput({
-            media: { data: base64Data, mimeType: 'image/jpeg' }
-          });
-        });
+        try {
+          const base64Data = await blobToBase64(blob);
+          // Check connection again before sending
+          if (this.isConnected && this.sessionPromise) {
+            this.sessionPromise.then(session => {
+              try {
+                 session.sendRealtimeInput({
+                  media: { data: base64Data, mimeType: 'image/jpeg' }
+                });
+              } catch (e) {
+                // Ignore send errors
+              }
+            }).catch(() => {});
+          }
+        } catch (e) {
+          // Ignore blob errors
+        }
       }
     }, 'image/jpeg', 0.5);
   }
@@ -182,9 +236,7 @@ export class GeminiService {
     this.cleanupCallbacks = [];
     this.sources.forEach(s => s.stop());
     this.sources.clear();
-    // No explicit close method on session object in the provided docs, 
-    // but cleaning up audio context and stream effectively ends client side.
-    // The server will timeout or close eventually. 
-    // Ideally we would call session.close() if available.
+    this.isConnected = false;
+    this.sessionPromise = null;
   }
 }

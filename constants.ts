@@ -9,13 +9,16 @@ import {
   MessageSquare,
   Settings,
   Cpu,
-  Monitor
+  Monitor,
+  FileText,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 
 export const ICONS = {
   Video,
   Mic,
-  MicOff,
+  MicOff, 
   VideoOff,
   PhoneOff,
   Play,
@@ -23,7 +26,10 @@ export const ICONS = {
   MessageSquare,
   Settings,
   Cpu,
-  Monitor
+  Monitor,
+  FileText,
+  ChevronDown,
+  ChevronUp
 };
 
 export const SUPPORTED_LANGUAGES = [

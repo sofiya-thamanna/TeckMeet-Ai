@@ -1,10 +1,12 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { ICONS, LANGUAGE_BOILERPLATES } from './constants';
-import { AppState, InterviewStatus, Role } from './types';
+import { AppState, InterviewStatus, Role, Question, EvaluationReport } from './types';
 import CodeEditor from './components/Editor';
 import Terminal from './components/Terminal';
 import VideoGrid from './components/VideoGrid';
+import ReportCard from './components/ReportCard';
 import { GeminiService } from './services/geminiService';
+import { API } from './backend/api';
 import Peer from 'peerjs';
 
 const App: React.FC = () => {
@@ -13,23 +15,42 @@ const App: React.FC = () => {
   const [username, setUsername] = useState('');
   const [role, setRole] = useState<Role>('candidate');
   
+  // App State
   const [language, setLanguage] = useState('javascript');
   const [code, setCode] = useState(LANGUAGE_BOILERPLATES['javascript']);
   const [output, setOutput] = useState('');
   const [isRunningCode, setIsRunningCode] = useState(false);
+  const [report, setReport] = useState<EvaluationReport | null>(null);
+  const [isGeneratingReport, setIsGeneratingReport] = useState(false);
+
+  // Question Management (Simulating DB)
+  const [questions, setQuestions] = useState<Question[]>([]);
+  const [currentQuestion, setCurrentQuestion] = useState<Question | null>(null);
+  const [isQuestionExpanded, setIsQuestionExpanded] = useState(true);
   
+  // Media & Network
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
-  const [remoteVolume, setRemoteVolume] = useState(0); // For AI
+  const [remoteVolume, setRemoteVolume] = useState(0); 
   const [status, setStatus] = useState<InterviewStatus>(InterviewStatus.DISCONNECTED);
   
   const geminiRef = useRef<GeminiService | null>(null);
   const videoIntervalRef = useRef<number | null>(null);
-  
-  // PeerJS Refs
   const peerRef = useRef<Peer | null>(null);
-  const connRef = useRef<any>(null); // Data connection
-  const callRef = useRef<any>(null); // Media call
+  const connRef = useRef<any>(null); 
+  const callRef = useRef<any>(null);
+
+  // Load questions from "Backend" on mount
+  useEffect(() => {
+    API.getQuestions().then(data => {
+      setQuestions(data);
+      // Default to first question
+      if(data.length > 0) {
+        setCurrentQuestion(data[0]);
+        setCode(data[0].starterCode['javascript']);
+      }
+    });
+  }, []);
 
   const startInterview = async () => {
     if (!username || !accessCode) return;
@@ -40,36 +61,41 @@ const App: React.FC = () => {
       const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
       setLocalStream(stream);
 
-      // 1. Initialize Gemini AI (Only for Candidate)
-      // Even if interviewer joins, candidate keeps AI connection for "monitoring" or fallback, 
-      // though visual priority changes.
+      // 1. Candidate AI logic
       if (role === 'candidate') {
+        // Initialize Gemini Service
         geminiRef.current = new GeminiService();
-        await geminiRef.current.connect(
+        
+        // Attempt connection but don't block the whole flow if it fails
+        geminiRef.current.connect(
+          stream,
           (vol) => setRemoteVolume(vol),
           () => console.log("AI Disconnected"),
-          (err) => console.error("AI Error", err)
-        );
-        
-        // Start sending video frames to AI
-        videoIntervalRef.current = window.setInterval(() => {
-          const videoEl = document.querySelector('video'); // Selects the first video element (User's)
-          if (videoEl && geminiRef.current) {
-             // We need to ensure we are selecting the LOCAL video, not remote.
-             // VideoGrid renders remote first then local. Local has scale-x-[-1].
-             // To be safe, we can pass the stream tracks or manage ID. 
-             // For now, let's assume VideoGrid structure: Remote is Top, Local is Bottom.
-             // QuerySelectorAll might be safer.
-             const videos = document.querySelectorAll('video');
-             const localVideo = videos.length > 1 ? videos[1] : videos[0];
-             if (localVideo) geminiRef.current.sendVideoFrame(localVideo as HTMLVideoElement);
+          (err) => {
+             // Only log runtime errors, connection errors are caught below
+             console.error("AI Runtime Error", err);
           }
-        }, 1000);
+        ).then(() => {
+          console.log("AI Connected Successfully");
+          // Start Video Loop only if connected
+          if (videoIntervalRef.current) clearInterval(videoIntervalRef.current);
+          videoIntervalRef.current = window.setInterval(() => {
+            const videos = document.querySelectorAll('video');
+            const localVideo = videos.length > 1 ? videos[1] : videos[0];
+            if (localVideo && geminiRef.current) geminiRef.current.sendVideoFrame(localVideo as HTMLVideoElement);
+          }, 1000);
+        }).catch((e) => {
+          console.warn("AI Connection Failed (Proceeding with manual interview)", e);
+          // AI failed, but we continue to Peer connection
+          if (geminiRef.current) {
+            geminiRef.current.disconnect();
+            geminiRef.current = null;
+          }
+        });
       }
       
-      // 2. Initialize PeerJS for Human Connection
+      // 2. Peer Connection
       initPeer(stream);
-      
       setStatus(InterviewStatus.CONNECTED);
 
     } catch (err) {
@@ -80,7 +106,6 @@ const App: React.FC = () => {
   };
 
   const initPeer = (stream: MediaStream) => {
-    // Deterministic IDs: room-candidate, room-interviewer
     const myId = `${accessCode}-${role}`;
     const targetId = `${accessCode}-${role === 'candidate' ? 'interviewer' : 'candidate'}`;
     
@@ -88,59 +113,43 @@ const App: React.FC = () => {
     peerRef.current = peer;
 
     peer.on('open', (id) => {
-      console.log('My Peer ID:', id);
-      
-      // If Interviewer, initiate call to Candidate
       if (role === 'interviewer') {
         connectToPeer(targetId, stream);
       }
     });
 
-    // Handle Incoming Call
     peer.on('call', (call) => {
-      console.log('Incoming call from', call.peer);
-      call.answer(stream); // Answer with my stream
+      call.answer(stream);
       callRef.current = call;
-      
-      call.on('stream', (remoteStream: MediaStream) => {
-        console.log('Received remote stream');
-        setRemoteStream(remoteStream);
-      });
+      call.on('stream', (rs: MediaStream) => setRemoteStream(rs));
     });
 
-    // Handle Incoming Data Connection (for Code Sync)
     peer.on('connection', (conn) => {
-      console.log('Incoming data connection from', conn.peer);
       connRef.current = conn;
       setupDataConnection(conn);
-    });
-    
-    peer.on('error', (err) => {
-      console.warn("Peer error:", err.type);
-      // 'peer-unavailable' is common if the other person hasn't joined yet.
     });
   };
 
   const connectToPeer = (targetId: string, stream: MediaStream) => {
     if (!peerRef.current) return;
 
-    // Call for Video
     const call = peerRef.current.call(targetId, stream);
     callRef.current = call;
-    
-    call.on('stream', (remoteStream: MediaStream) => {
-       console.log('Received remote stream (outbound call)');
-       setRemoteStream(remoteStream);
-    });
+    call.on('stream', (rs: MediaStream) => setRemoteStream(rs));
 
-    // Connect for Data (Code)
     const conn = peerRef.current.connect(targetId);
     connRef.current = conn;
     
     conn.on('open', () => {
-      console.log("Data connection opened");
-      // Send initial code state
-      conn.send({ type: 'SYNC_CODE', payload: { code, language } });
+      // Sync initial state to candidate
+      conn.send({ 
+        type: 'SYNC_STATE', 
+        payload: { 
+          code, 
+          language, 
+          questionId: currentQuestion?.id 
+        } 
+      });
     });
 
     setupDataConnection(conn);
@@ -148,61 +157,114 @@ const App: React.FC = () => {
 
   const setupDataConnection = (conn: any) => {
     conn.on('data', (data: any) => {
-      if (data.type === 'CODE_CHANGE') {
-        // Only update if content is different to avoid cursor jump/loops
-        // Simple implementation: just update. 
-        setCode(data.payload); 
-      }
-      if (data.type === 'SYNC_CODE') {
-        setCode(data.payload.code);
-        setLanguage(data.payload.language);
-      }
+      if (data.type === 'CODE_CHANGE') setCode(data.payload);
       if (data.type === 'LANG_CHANGE') {
-        setLanguage(data.payload);
-        setCode(LANGUAGE_BOILERPLATES[data.payload]);
+         setLanguage(data.payload.language);
+         setCode(data.payload.code);
+      }
+      if (data.type === 'SYNC_STATE') {
+        setLanguage(data.payload.language);
+        setCode(data.payload.code);
+        const q = questions.find(q => q.id === data.payload.questionId);
+        if (q) setCurrentQuestion(q);
+      }
+      if (data.type === 'QUESTION_CHANGE') {
+        const q = questions.find(q => q.id === data.payload.questionId);
+        if (q) {
+          setCurrentQuestion(q);
+          setLanguage(data.payload.language);
+          setCode(data.payload.code);
+        }
       }
     });
   };
 
-  const endInterview = () => {
+  const handleQuestionChange = (questionId: string) => {
+    const q = questions.find(q => q.id === questionId);
+    if (!q) return;
+
+    // Logic to reset code to starter template when question changes
+    const newCode = q.starterCode[language] || q.starterCode['javascript'];
+    
+    setCurrentQuestion(q);
+    setCode(newCode);
+
+    if (connRef.current?.open) {
+      connRef.current.send({ 
+        type: 'QUESTION_CHANGE', 
+        payload: { questionId: q.id, code: newCode, language } 
+      });
+    }
+  };
+
+  const endInterview = async () => {
     if (geminiRef.current) geminiRef.current.disconnect();
     if (videoIntervalRef.current) clearInterval(videoIntervalRef.current);
     if (localStream) localStream.getTracks().forEach(track => track.stop());
+    if (callRef.current) callRef.current.close();
     if (peerRef.current) peerRef.current.destroy();
     
     setLocalStream(null);
     setRemoteStream(null);
     setAppState(AppState.ENDED);
+
+    // Call "Backend" to generate report
+    setIsGeneratingReport(true);
+    const result = await API.generateReport(
+      code, 
+      language, 
+      currentQuestion?.title || "Coding Problem"
+    );
+    setReport(result);
+    setIsGeneratingReport(false);
+  };
+
+  // Reset state to Lobby without page reload
+  const returnToLobby = () => {
+    setAppState(AppState.LOBBY);
+    setReport(null);
+    setAccessCode('');
+    setStatus(InterviewStatus.DISCONNECTED);
+    setOutput('');
+    setRemoteVolume(0);
+    setLanguage('javascript');
+    
+    // Reset question state
+    if (questions.length > 0) {
+      setCurrentQuestion(questions[0]);
+      setCode(questions[0].starterCode['javascript']);
+    } else {
+      setCode(LANGUAGE_BOILERPLATES['javascript']);
+    }
   };
 
   const handleLanguageChange = (newLang: string) => {
     setLanguage(newLang);
-    const newCode = LANGUAGE_BOILERPLATES[newLang];
+    // Try to preserve code if it's not default, otherwise switch to starter
+    // For simplicity, let's switch to starter for that language if we have a question
+    let newCode = LANGUAGE_BOILERPLATES[newLang];
+    if (currentQuestion && currentQuestion.starterCode[newLang]) {
+      newCode = currentQuestion.starterCode[newLang];
+    }
+    
     setCode(newCode);
     
-    if (connRef.current && connRef.current.open) {
-      connRef.current.send({ type: 'LANG_CHANGE', payload: newLang });
+    if (connRef.current?.open) {
+      connRef.current.send({ type: 'LANG_CHANGE', payload: { language: newLang, code: newCode } });
     }
   };
 
   const handleCodeChange = (newCode: string) => {
     setCode(newCode);
-    if (connRef.current && connRef.current.open) {
+    if (connRef.current?.open) {
       connRef.current.send({ type: 'CODE_CHANGE', payload: newCode });
     }
   };
 
   const handleRunCode = async () => {
     setIsRunningCode(true);
-    // If Interviewer runs code, they might not have Gemini instance if we only init for Candidate.
-    // For this demo, let's create a temporary instance for Interviewer or assume Candidate runs it.
-    // Better: Allow Interviewer to run it too via their own API key (shared env).
-    
     let service = geminiRef.current;
-    if (!service) {
-        service = new GeminiService(); // Temporary instance for Interviewer execution
-    }
-    
+    if (!service) service = new GeminiService();
     const result = await service.runCode(code, language);
     setOutput(result);
     setIsRunningCode(false);
@@ -212,7 +274,7 @@ const App: React.FC = () => {
     return (
       <div className="min-h-screen bg-gray-900 flex items-center justify-center p-4">
         <div className="bg-gray-800 p-8 rounded-2xl shadow-2xl w-full max-w-md border border-gray-700">
-          <div className="flex justify-center mb-6">
+           <div className="flex justify-center mb-6">
             <div className="w-16 h-16 bg-blue-600 rounded-xl flex items-center justify-center shadow-lg">
               <ICONS.Cpu className="w-8 h-8 text-white" />
             </div>
@@ -246,9 +308,7 @@ const App: React.FC = () => {
               <button
                 onClick={() => setRole('candidate')}
                 className={`flex-1 py-2 rounded-md text-sm font-medium transition-all ${
-                  role === 'candidate' 
-                    ? 'bg-blue-600 text-white shadow' 
-                    : 'text-gray-400 hover:text-white'
+                  role === 'candidate' ? 'bg-blue-600 text-white shadow' : 'text-gray-400 hover:text-white'
                 }`}
               >
                 Candidate
@@ -256,9 +316,7 @@ const App: React.FC = () => {
               <button
                 onClick={() => setRole('interviewer')}
                 className={`flex-1 py-2 rounded-md text-sm font-medium transition-all ${
-                  role === 'interviewer' 
-                    ? 'bg-blue-600 text-white shadow' 
-                    : 'text-gray-400 hover:text-white'
+                  role === 'interviewer' ? 'bg-blue-600 text-white shadow' : 'text-gray-400 hover:text-white'
                 }`}
               >
                 Interviewer
@@ -281,25 +339,27 @@ const App: React.FC = () => {
 
   if (appState === AppState.ENDED) {
     return (
-      <div className="min-h-screen bg-gray-900 flex items-center justify-center p-4">
-        <div className="bg-gray-800 p-8 rounded-2xl shadow-2xl text-center border border-gray-700">
-          <ICONS.PhoneOff className="w-16 h-16 text-red-500 mx-auto mb-4" />
-          <h2 className="text-2xl font-bold text-white mb-2">Interview Ended</h2>
-          <p className="text-gray-400 mb-6">Thank you for participating.</p>
-          <button 
-            onClick={() => window.location.reload()}
-            className="bg-gray-700 hover:bg-gray-600 text-white px-6 py-2 rounded-lg transition-colors"
-          >
-            Back to Home
-          </button>
-        </div>
+      <div className="min-h-screen bg-gray-900 flex items-center justify-center p-4 relative">
+        {isGeneratingReport ? (
+           <div className="text-center">
+             <div className="animate-spin rounded-full h-16 w-16 border-b-2 border-blue-500 mx-auto mb-4"></div>
+             <h2 className="text-xl font-bold text-white">Generating Feedback Report...</h2>
+             <p className="text-gray-400">Analyzing code complexity and quality</p>
+           </div>
+        ) : report ? (
+           <ReportCard report={report} onClose={returnToLobby} />
+        ) : (
+           <div className="text-center">
+             <h2 className="text-2xl font-bold text-white mb-4">Interview Ended</h2>
+             <button onClick={returnToLobby} className="bg-gray-700 px-6 py-2 rounded text-white">Home</button>
+           </div>
+        )}
       </div>
     );
   }
 
   return (
     <div className="h-screen flex flex-col bg-gray-900">
-      {/* Header */}
       <header className="h-16 bg-gray-800 border-b border-gray-700 flex items-center justify-between px-6 shrink-0">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center">
@@ -309,11 +369,26 @@ const App: React.FC = () => {
             <h1 className="font-bold text-lg tracking-tight leading-none">TechMeet AI</h1>
             <span className="text-xs text-gray-400 font-normal">Role: {role}</span>
           </div>
-          <span className="px-2 py-0.5 rounded text-xs bg-gray-700 text-gray-400 font-mono ml-2">Code: {accessCode}</span>
         </div>
         
+        {/* Interviewer Controls for Question Selection */}
+        {role === 'interviewer' && (
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-400 uppercase tracking-wide">Current Problem:</span>
+            <select 
+              className="bg-gray-700 text-sm text-white px-3 py-1.5 rounded border border-gray-600 outline-none"
+              value={currentQuestion?.id}
+              onChange={(e) => handleQuestionChange(e.target.value)}
+            >
+              {questions.map(q => (
+                <option key={q.id} value={q.id}>{q.title}</option>
+              ))}
+            </select>
+          </div>
+        )}
+        
         <div className="flex items-center gap-4">
-          <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium ${
+           <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium ${
             status === InterviewStatus.CONNECTED ? 'bg-green-500/10 text-green-500' : 'bg-yellow-500/10 text-yellow-500'
           }`}>
             <div className={`w-2 h-2 rounded-full ${
@@ -326,16 +401,36 @@ const App: React.FC = () => {
             className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2"
           >
             <ICONS.PhoneOff className="w-4 h-4" />
-            End Call
+            Finish & Report
           </button>
         </div>
       </header>
 
-      {/* Main Content */}
       <main className="flex-1 flex overflow-hidden p-4 gap-4">
-        {/* Left: Code Editor (60%) */}
         <div className="flex-[3] flex flex-col gap-4 min-w-0">
-          <div className="flex-1 min-h-0">
+          <div className="flex-1 min-h-0 relative">
+             {/* Problem Description Collapsible Panel */}
+             {currentQuestion && isQuestionExpanded && (
+               <div className="absolute top-14 right-4 z-20 max-w-[400px] w-full transition-all duration-300 ease-in-out flex justify-end">
+                   <div className="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl overflow-hidden flex flex-col w-full animate-fade-in-down">
+                     <div 
+                       className="flex items-center justify-between px-4 py-2 bg-gray-700/50 border-b border-gray-600 cursor-pointer hover:bg-gray-700 transition-colors"
+                       onClick={() => setIsQuestionExpanded(false)}
+                     >
+                        <h3 className="font-bold text-sm text-white flex items-center gap-2">
+                          <ICONS.FileText className="w-4 h-4 text-blue-400" />
+                          {currentQuestion.title}
+                        </h3>
+                        <button className="text-gray-400 hover:text-white">
+                          <ICONS.ChevronUp className="w-4 h-4" />
+                        </button>
+                     </div>
+                     <div className="p-4 text-sm text-gray-300 max-h-48 overflow-y-auto leading-relaxed">
+                       {currentQuestion.description}
+                     </div>
+                   </div>
+               </div>
+             )}
             <CodeEditor 
               code={code} 
               language={language}
@@ -343,6 +438,8 @@ const App: React.FC = () => {
               onLanguageChange={handleLanguageChange}
               onRun={handleRunCode}
               isRunning={isRunningCode}
+              onToggleQuestion={() => setIsQuestionExpanded(prev => !prev)}
+              showQuestionButton={!!currentQuestion}
             />
           </div>
           <div className="h-1/3 min-h-0">
@@ -350,7 +447,6 @@ const App: React.FC = () => {
           </div>
         </div>
 
-        {/* Right: Video & Chat (40%) */}
         <div className="flex-[2] flex flex-col gap-4 min-w-0">
           <div className="flex-1 min-h-0">
             <VideoGrid 
@@ -368,16 +464,12 @@ const App: React.FC = () => {
             <div className="flex-1 overflow-y-auto text-sm text-gray-400 space-y-2">
               <p className="bg-gray-700/50 p-2 rounded">
                 <span className="text-blue-400 font-bold block mb-1">Status</span>
-                {remoteStream 
-                  ? "Connected to Human Interviewer." 
-                  : role === 'candidate' 
-                    ? "Waiting for Interviewer. AI Recruiter is active." 
-                    : "Waiting for Candidate..."}
+                {remoteStream ? "Connected to Human Interviewer." : "Waiting for Interviewer..."}
               </p>
-              {role === 'candidate' && !remoteStream && (
+              {role === 'candidate' && (
                 <p className="bg-gray-700/50 p-2 rounded">
-                  <span className="text-blue-400 font-bold block mb-1">AI System</span>
-                  The AI is listening. You can start coding or talking.
+                  <span className="text-blue-400 font-bold block mb-1">Active Task</span>
+                  {currentQuestion ? currentQuestion.title : "Waiting for question..."}
                 </p>
               )}
             </div>
