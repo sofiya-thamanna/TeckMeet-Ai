@@ -1,3 +1,4 @@
+
 export enum AppState {
   LOBBY = 'LOBBY',
   INTERVIEW = 'INTERVIEW',
@@ -17,6 +18,13 @@ export enum InterviewStatus {
   CONNECTED = 'CONNECTED',
   DISCONNECTED = 'DISCONNECTED',
   ERROR = 'ERROR'
+}
+
+export interface ChatMessage {
+  id: string;
+  sender: string; // 'Me' or 'Interviewer/Candidate'
+  text: string;
+  timestamp: number;
 }
 
 // Backend Entities

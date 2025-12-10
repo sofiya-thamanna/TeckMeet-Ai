@@ -158,9 +158,8 @@ export class GeminiService {
           },
           onerror: (e) => {
              // Only report error if we were previously connected.
-             // Initial connection failures are handled by the promise catch block below.
+             // We avoid logging here to prevent duplication with App.tsx which receives this callback.
             if (this.isConnected) {
-               console.error("Gemini Live Error", e);
                this.isConnected = false;
                onError(e);
             }

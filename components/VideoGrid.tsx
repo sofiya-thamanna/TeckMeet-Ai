@@ -5,11 +5,12 @@ import { Role } from '../types';
 interface VideoGridProps {
   localStream: MediaStream | null;
   remoteStream: MediaStream | null; // Human interviewer/candidate stream
-  remoteVolume: number; // For AI visualizer
   role: Role;
+  isMicOn: boolean;
+  isCameraOn: boolean;
 }
 
-const VideoGrid: React.FC<VideoGridProps> = ({ localStream, remoteStream, remoteVolume, role }) => {
+const VideoGrid: React.FC<VideoGridProps> = ({ localStream, remoteStream, role, isMicOn, isCameraOn }) => {
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
 
@@ -17,7 +18,7 @@ const VideoGrid: React.FC<VideoGridProps> = ({ localStream, remoteStream, remote
     if (localVideoRef.current && localStream) {
       localVideoRef.current.srcObject = localStream;
     }
-  }, [localStream]);
+  }, [localStream, isCameraOn]); 
 
   useEffect(() => {
     if (remoteVideoRef.current && remoteStream) {
@@ -25,25 +26,16 @@ const VideoGrid: React.FC<VideoGridProps> = ({ localStream, remoteStream, remote
     }
   }, [remoteStream]);
 
-  // Visualizer bars for AI
-  const bars = 5;
-  const barHeight = Math.min(100, Math.max(10, remoteVolume * 2));
-
-  // Determine what to show in the "Remote" slot
-  // If there is a human remote stream, show it.
-  // Otherwise, if role is candidate, show AI.
-  // If role is interviewer and no candidate yet, show waiting.
   const showHumanRemote = !!remoteStream;
-  const showAi = !showHumanRemote && role === 'candidate';
 
   return (
     <div className="grid grid-rows-2 gap-4 h-full">
-      {/* Remote View (Interviewer or AI or Candidate) */}
-      <div className="relative bg-gray-800 rounded-xl overflow-hidden border border-gray-700 flex items-center justify-center group">
+      {/* Remote View */}
+      <div className="relative bg-gray-800 rounded-xl overflow-hidden border border-gray-700 flex items-center justify-center group shadow-inner">
         
         {showHumanRemote ? (
            <>
-             <div className="absolute top-4 left-4 bg-black/50 px-2 py-1 rounded text-xs text-white flex items-center gap-2 z-10">
+             <div className="absolute top-4 left-4 bg-black/50 px-2 py-1 rounded text-xs text-white flex items-center gap-2 z-10 backdrop-blur-sm">
                <div className="w-2 h-2 rounded-full bg-green-500"></div>
                {role === 'candidate' ? 'Interviewer' : 'Candidate'}
              </div>
@@ -54,41 +46,28 @@ const VideoGrid: React.FC<VideoGridProps> = ({ localStream, remoteStream, remote
                className="w-full h-full object-cover"
              />
            </>
-        ) : showAi ? (
-            <>
-              <div className="absolute top-4 left-4 bg-black/50 px-2 py-1 rounded text-xs text-white flex items-center gap-2 z-10">
-                <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></div>
-                AI Interviewer
-              </div>
-              
-              {/* Audio Visualizer Avatar */}
-              <div className="flex items-end justify-center space-x-2 h-24">
-                {[...Array(bars)].map((_, i) => (
-                  <div 
-                      key={i}
-                      className="w-4 bg-blue-500 rounded-full transition-all duration-75"
-                      style={{ 
-                        height: `${Math.max(15, barHeight * (0.5 + Math.random() * 0.5))}px`,
-                        opacity: 0.6 + (barHeight / 200)
-                      }}
-                  />
-                ))}
-              </div>
-            </>
         ) : (
            <div className="text-gray-500 flex flex-col items-center">
              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-500 mb-2"></div>
-             <span>Waiting for participant...</span>
+             <span>Waiting for {role === 'candidate' ? 'Interviewer' : 'Candidate'}...</span>
            </div>
         )}
       </div>
 
       {/* Local (User) View */}
-      <div className="relative bg-gray-800 rounded-xl overflow-hidden border border-gray-700">
-         <div className="absolute top-4 left-4 bg-black/50 px-2 py-1 rounded text-xs text-white z-10">
-          You ({role})
+      <div className="relative bg-gray-800 rounded-xl overflow-hidden border border-gray-700 shadow-inner">
+         <div className="absolute top-4 left-4 bg-black/50 px-2 py-1 rounded text-xs text-white z-10 backdrop-blur-sm flex items-center gap-2">
+          <span>You ({role})</span>
+          {!isMicOn && <ICONS.MicOff className="w-3 h-3 text-red-400" />}
         </div>
-        {localStream ? (
+        
+        {!isMicOn && (
+          <div className="absolute top-4 right-4 bg-red-500/80 p-1.5 rounded-full z-10">
+             <ICONS.MicOff className="w-4 h-4 text-white" />
+          </div>
+        )}
+
+        {localStream && isCameraOn ? (
           <video 
             ref={localVideoRef}
             autoPlay 
@@ -97,8 +76,11 @@ const VideoGrid: React.FC<VideoGridProps> = ({ localStream, remoteStream, remote
             className="w-full h-full object-cover transform scale-x-[-1]"
           />
         ) : (
-          <div className="flex items-center justify-center h-full text-gray-500">
-            <ICONS.VideoOff className="w-12 h-12 mb-2" />
+          <div className="flex flex-col items-center justify-center h-full text-gray-400 bg-gray-750">
+            <div className="w-20 h-20 rounded-full bg-gray-700 flex items-center justify-center mb-3">
+               <span className="text-2xl font-bold">{role === 'candidate' ? 'C' : 'I'}</span>
+            </div>
+            <p className="text-sm font-medium">Camera Off</p>
           </div>
         )}
       </div>

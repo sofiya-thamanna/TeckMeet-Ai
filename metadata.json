@@ -3,6 +3,7 @@
   "description": "A technical interview platform where you code and chat with an AI recruiter in real-time.",
   "requestFramePermissions": [
     "camera",
-    "microphone"
+    "microphone",
+    "display-capture"
   ]
 }
