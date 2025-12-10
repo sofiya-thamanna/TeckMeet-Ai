@@ -9,13 +9,15 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "lucide-react": "^0.556.0",
-    "react": "^19.2.1",
+    "@vitejs/plugin-react": "^5.1.2",
+    "vite": "^7.2.7",
+    "lucide-react": "^0.559.0",
     "react-dom": "^19.2.1",
+    "react": "^19.2.1",
     "@google/genai": "^1.32.0",
-    "prismjs": "^1.30.0",
+    "peerjs": "^1.5.5",
     "react-simple-code-editor": "^0.14.1",
-    "peerjs": "1.5.4"
+    "prismjs": "^1.30.0"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",

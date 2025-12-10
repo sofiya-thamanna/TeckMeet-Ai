@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>TechMeet AI</title>
+    <!-- Using Tailwind CDN for quick setup -->
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet" />
     <style>
@@ -29,20 +30,24 @@
   <script type="importmap">
 {
   "imports": {
-    "lucide-react": "https://aistudiocdn.com/lucide-react@^0.556.0",
-    "react/": "https://aistudiocdn.com/react@^19.2.1/",
-    "react": "https://aistudiocdn.com/react@^19.2.1",
-    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.1/",
-    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.32.0",
-    "prismjs/": "https://aistudiocdn.com/prismjs@^1.30.0/",
-    "prismjs": "https://aistudiocdn.com/prismjs@^1.30.0",
-    "react-simple-code-editor": "https://aistudiocdn.com/react-simple-code-editor@^0.14.1",
-    "peerjs": "https://esm.sh/peerjs@1.5.4?bundle-deps"
+    "@vitejs/plugin-react": "https://esm.sh/@vitejs/plugin-react@^5.1.2",
+    "vite": "https://esm.sh/vite@^7.2.7",
+    "lucide-react": "https://esm.sh/lucide-react@^0.559.0",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.1/",
+    "react/": "https://esm.sh/react@^19.2.1/",
+    "react": "https://esm.sh/react@^19.2.1",
+    "@google/genai": "https://esm.sh/@google/genai@^1.32.0",
+    "peerjs": "https://esm.sh/peerjs@^1.5.5",
+    "react-simple-code-editor": "https://esm.sh/react-simple-code-editor@^0.14.1",
+    "prismjs/": "https://esm.sh/prismjs@^1.30.0/",
+    "prismjs": "https://esm.sh/prismjs@^1.30.0"
   }
 }
 </script>
 </head>
   <body class="bg-gray-900 text-white h-screen overflow-hidden">
     <div id="root"></div>
+    <!-- CRITICAL FIX: This script tag loads your local React application -->
+    <script type="module" src="/src/index.tsx"></script>
   </body>
 </html>
